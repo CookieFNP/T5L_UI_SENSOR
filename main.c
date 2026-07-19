@@ -20,7 +20,7 @@
 #define VP_TEMP_COMP       0x0917   // 温度补偿，1 = 0.1℃
 #define VP_HUM_COMP        0x1109   // 湿度补偿，10 = 1 湿度
 
-/* 调试变量，正式 UI 没显示也没关系 */
+/* 调试变量 */
 #define VP_DBG_LOOP        0x1000
 #define VP_DBG_TARGET_FAN  0x8899
 #define VP_DBG_PERCENT     0x8999
@@ -38,18 +38,45 @@
 #define MODE_VENT          2
 
 /* =========================
+   0-10V / PWM 输出引脚
+   ========================= */
+
+/*
+   P1.3 = P13 / VSP
+   P1.4 = P14 / PWM
+*/
+sbit VSP_OUT = P1^3;
+sbit PWM_OUT = P1^4;
+
+/*
+   1ms tick，20 tick 一个周期 = 50Hz
+   fan_percent:
+   0   -> 0V
+   20  -> 2V
+   40  -> 4V
+   60  -> 6V
+   80  -> 8V
+   100 -> 10V
+*/
+#define OUTPUT_PWM_PERIOD_TICKS  20
+
+xdata u8 output_pwm_tick;
+xdata u8 output_duty_ticks;
+xdata u16 output_percent_now;
+
+/* =========================
    RTC 一次性校时开关
    ========================= */
 
 /*
    需要校时时：
    1. 把 RTC_FORCE_SET_ONCE 改成 1
-   2. 修改下面 rtc_set_time_once_if_needed() 里的时间
+   2. 修改 rtc_set_time_once_if_needed() 里的时间
    3. 烧录一次
-   4. 看到时间对了以后，必须改回 0
+   4. 时间对了以后，必须改回 0
    5. 再烧一次正式版
 
-   正式运行时必须保持 0，否则每次上电都会回到写死的时间。
+   正式运行时必须保持 0。
 */
 #define RTC_FORCE_SET_ONCE  0
 
@@ -90,10 +117,10 @@ code vp_init_item_t vp_init_table[] =
     {0x1065, 50},
     {0x1067, 70},
     {0x1069, 100},
-	{0x1043,150},
-	{0x1045,300},
-	{0x1047,170},
-	{0x1049,320},
+	{0x1043, 150},
+	{0x1045, 300},
+	{0x1047, 170},
+	{0x1049, 320},
 };
 
 #define VP_INIT_TABLE_SIZE  (sizeof(vp_init_table) / sizeof(vp_init_table[0]))
@@ -155,6 +182,94 @@ static void app_vars_init(void)
 }
 
 /* =========================
+   0-10V / PWM 输出
+   ========================= */
+
+static void output_pin_set(u8 level)
+{
+    if(level)
+    {
+        VSP_OUT = 1;
+        PWM_OUT = 1;
+    }
+    else
+    {
+        VSP_OUT = 0;
+        PWM_OUT = 0;
+    }
+}
+
+static void output_init(void)
+{
+    /*
+       P1.3 / P1.4 推挽输出
+       bit3 = 0x08
+       bit4 = 0x10
+    */
+    P1MDOUT |= 0x18;
+
+    output_pwm_tick = 0;
+    output_duty_ticks = 0;
+    output_percent_now = 0;
+
+    output_pin_set(0);
+}
+
+static void output_set_percent(u16 percent)
+{
+    if(percent > 100)
+    {
+        percent = 100;
+    }
+
+    output_percent_now = percent;
+
+    /*
+       把 0~100% 换算成 0~20 tick
+       20% -> 4 tick
+       40% -> 8 tick
+       60% -> 12 tick
+       80% -> 16 tick
+       100% -> 20 tick
+    */
+    output_duty_ticks = (u8)((percent * OUTPUT_PWM_PERIOD_TICKS) / 100);
+}
+
+/*
+   这个函数由 sys.c 的 Timer2 中断每 1ms 调一次。
+   不能写成 static，因为 sys.c 要 extern 调用它。
+*/
+void output_pwm_tick_1ms(void)
+{
+    if(output_duty_ticks == 0)
+    {
+        output_pin_set(0);
+    }
+    else if(output_duty_ticks >= OUTPUT_PWM_PERIOD_TICKS)
+    {
+        output_pin_set(1);
+    }
+    else
+    {
+        if(output_pwm_tick < output_duty_ticks)
+        {
+            output_pin_set(1);
+        }
+        else
+        {
+            output_pin_set(0);
+        }
+    }
+
+    output_pwm_tick++;
+
+    if(output_pwm_tick >= OUTPUT_PWM_PERIOD_TICKS)
+    {
+        output_pwm_tick = 0;
+    }
+}
+
+/* =========================
    RTC 一次性校时
    ========================= */
 
@@ -164,21 +279,19 @@ static void rtc_set_time_once_if_needed(void)
     rtc_time_t set_time;
 
     /*
-       这里是校时时间。
-       当前示例：2026-07-19 18:41:00
+       示例：2026-07-19 18:41:00
 
        结构体顺序：
        year, month, day, week, hour, min, sec, fault
 
        week 如果 UI 不显示星期，影响不大。
-       2026-07-19 是周日，这里填 7。
     */
     set_time.year  = 26;
     set_time.month = 7;
     set_time.day   = 19;
     set_time.week  = 7;
-    set_time.hour  = 20;
-    set_time.min   = 02;
+    set_time.hour  = 18;
+    set_time.min   = 41;
     set_time.sec   = 0;
     set_time.fault = 0;
 
@@ -458,6 +571,12 @@ int main(void)
     sys_init();
     app_vars_init();
 
+    /*
+       初始化 0-10V/PWM 输出。
+       必须在主循环前执行。
+    */
+    output_init();
+
     ntc_init();
     rtc_init();
     rtc_set_time_once_if_needed();
@@ -476,12 +595,17 @@ int main(void)
     set_temp_x10 = 240;
     fan_mode = FAN_AUTO;
     work_mode = MODE_COOL;
-    hum_show = 58;
+    hum_show = 24;
 
     sys_write_vp(VP_SET_TEMP, (u8 *)&set_temp_x10, 1);
     sys_write_vp(VP_FAN_MODE, (u8 *)&fan_mode, 1);
     sys_write_vp(VP_WORK_MODE, (u8 *)&work_mode, 1);
     sys_write_vp(VP_DISP_SD, (u8 *)&hum_show, 1);
+
+    /*
+       上电先输出默认风速1，也就是 20%，约 2V。
+    */
+    output_set_percent(fan_percent);
 
     while(1)
     {
@@ -494,7 +618,8 @@ int main(void)
            3. 读传感器并叠加补偿
            4. 读时钟
            5. 算风速
-           6. 写回显示
+           6. 更新 0-10V/PWM 输出
+           7. 写回显示
         */
         read_user_vars();
         protect_user_vars();
@@ -503,6 +628,7 @@ int main(void)
         update_rtc_display_values();
 
         update_fan_logic();
+        output_set_percent(fan_percent);
 
         write_display_values();
         write_debug_values();

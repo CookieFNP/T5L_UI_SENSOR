@@ -1,5 +1,6 @@
-#include "sys.h"
 
+#include "sys.h"
+extern void output_pwm_tick_1ms(void);
 static idata u16 delay_tick = 0; //����ʵ�־�ȷ��ʱ��
 
 
@@ -160,16 +161,14 @@ void sys_write_vp(u16 addr,u8* buf,u16 len)
 	RAMMODE = 0x00;
 } 
 
-
-//��ʱ��2�жϷ������
-void sys_timer2_isr()	interrupt 5
+void sys_timer2_isr() interrupt 5
 {
-	TF2=0;//�����ʱ��2���жϱ�־λ
-	
-	// temp_1ms_tick();
-	// uart_1ms_tick();
-	
-	//��׼��ʱ����
-	if(delay_tick)
-		delay_tick--;
+    TF2 = 0;
+
+    output_pwm_tick_1ms();
+
+    if(delay_tick)
+    {
+        delay_tick--;
+    }
 }
