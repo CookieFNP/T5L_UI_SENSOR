@@ -2,25 +2,26 @@
 #include "ntc_rtc.h"
 
 /* =========================
-   DGUS VP ï¿½ï¿½Ö·
+   DGUS VP µØÖ·
    ========================= */
 
-/* ï¿½Ã»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */
-#define VP_FAN_MODE        0x8021   // 0=ï¿½Ô¶ï¿½ï¿½ï¿½1~5=ï¿½ï¿½ï¿½ï¿½1~5
-#define VP_WORK_MODE       0x8011   // 0=ï¿½ï¿½ï¿½ä£¬1=ï¿½ï¿½ï¿½È£ï¿½2=Í¨ï¿½ï¿½
-#define VP_SET_TEMP        0x2233   // ï¿½è¶¨ï¿½Â¶È£ï¿½240=24.0ï¿½ï¿½
+/* ÓÃ»§ÉèÖÃ±äÁ¿ */
+#define VP_FAN_MODE        0x8021   // 0=×Ô¶¯£¬1~5=ÊÖ¶¯·çËÙ1~5
+#define VP_WORK_MODE       0x8011   // 0=ÖÆÀä£¬1=ÖÆÈÈ£¬2=Í¨·ç
+#define VP_SET_TEMP        0x2233   // Éè¶¨ÎÂ¶È£¬240=24.0¡æ
+#define VP_POWER_STATE     0x7373   // Ç°¶Ë¿ª¹Ø»ú×´Ì¬£º0=¹Ø»ú/´ý»ú£¬1=¿ª»ú/ÔËÐÐ
 
-/* ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½ */
-#define VP_CUR_TEMP        0x5100   // ï¿½ï¿½Ç°ï¿½Â¶ï¿½ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½Î» 0.1ï¿½ï¿½
-#define VP_DISP_HOUR       0x6666   // Ð¡Ê±ï¿½ï¿½Ê¾
-#define VP_DISP_MINUTE     0x6688   // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¾
-#define VP_DISP_SD         0x2288   // Êªï¿½ï¿½ï¿½ï¿½Ê¾ï¿½ï¿½Ä¿Ç°Ä¬ï¿½ï¿½ 24ï¿½ï¿½ï¿½Éµï¿½ï¿½ï¿½Êªï¿½È²ï¿½ï¿½ï¿½
+/* ÏÔÊ¾±äÁ¿ */
+#define VP_CUR_TEMP        0x5100   // µ±Ç°ÎÂ¶ÈÏÔÊ¾£¬µ¥Î» 0.1¡æ
+#define VP_DISP_HOUR       0x6666   // Ð¡Ê±ÏÔÊ¾
+#define VP_DISP_MINUTE     0x6688   // ·ÖÖÓÏÔÊ¾
+#define VP_DISP_SD         0x2288   // Êª¶ÈÏÔÊ¾£¬Ä¿Ç°Ä¬ÈÏ 24£¬¿Éµþ¼ÓÊª¶È²¹³¥
 
-/* ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */
-#define VP_TEMP_COMP       0x0917   // ï¿½Â¶È²ï¿½ï¿½ï¿½ï¿½ï¿½1 = 0.1ï¿½ï¿½
-#define VP_HUM_COMP        0x1109   // Êªï¿½È²ï¿½ï¿½ï¿½ï¿½ï¿½10 = 1 Êªï¿½ï¿½
+/* ²¹³¥±äÁ¿ */
+#define VP_TEMP_COMP       0x0917   // ÎÂ¶È²¹³¥£¬1 = 0.1¡æ
+#define VP_HUM_COMP        0x1109   // Êª¶È²¹³¥£¬10 = 1 Êª¶È
 
-/* ï¿½ï¿½ï¿½Ô±ï¿½ï¿½ï¿½ */
+/* µ÷ÊÔ±äÁ¿ */
 #define VP_DBG_LOOP        0x1000
 #define VP_DBG_TARGET_FAN  0x8899
 #define VP_DBG_PERCENT     0x8999
@@ -30,18 +31,19 @@
 #define VP_DBG_TEMP_COMP   0x101C
 #define VP_DBG_HUM_COMP    0x101E
 
-/* Ä£Ê½ï¿½ï¿½ï¿½ï¿½ */
+/* Ä£Ê½¶¨Òå */
 #define FAN_AUTO           0
 
 #define MODE_COOL          0
 #define MODE_HEAT          1
 #define MODE_VENT          2
 
-/* boot full action lock: reuse target_fan, no new xdata global */
-#define FAN_BOOT_LOCK     99
+/* ÌØÊâ×´Ì¬£º¸´ÓÃ target_fan£¬²»¶îÍâÔö¼ÓÌ«¶àÈ«¾Ö±äÁ¿ */
+#define FAN_POWER_OFF      98       // ¹Ø»ú/´ý»ú×´Ì¬
+#define FAN_BOOT_LOCK      99       // ¿ª»úÂúµµ¶¯×÷Ëø¶¨×´Ì¬
 
 /* =========================
-   0-10V / PWM ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+   0-10V / PWM Êä³öÉèÖÃ
    ========================= */
 
 /*
@@ -52,8 +54,8 @@ sbit VSP_OUT = P1^3;
 sbit PWM_OUT = P1^4;
 
 /*
-   1ms tickï¿½ï¿½20 tick Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ = 50Hz
-   fan_percent:
+   1ms tick£¬20 tick Ò»¸öÖÜÆÚ = 50Hz
+   Êä³ö°Ù·Ö±È£º
    0   -> 0V
    20  -> 2V
    40  -> 4V
@@ -68,23 +70,23 @@ xdata u8 output_duty_ticks;
 xdata u16 output_percent_now;
 
 /* =========================
-   RTC Ò»ï¿½ï¿½ï¿½ï¿½Ð£Ê±ï¿½ï¿½ï¿½ï¿½
+   RTC Ò»´ÎÐÔÐ£Ê±¿ª¹Ø
    ========================= */
 
 /*
-   ï¿½ï¿½ÒªÐ£Ê±Ê±ï¿½ï¿½
-   1. ï¿½ï¿½ RTC_FORCE_SET_ONCE ï¿½Ä³ï¿½ 1
-   2. ï¿½Þ¸ï¿½ rtc_set_time_once_if_needed() ï¿½ï¿½ï¿½Ê±ï¿½ï¿½
-   3. ï¿½ï¿½Â¼Ò»ï¿½ï¿½
-   4. Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ôºó£¬±ï¿½ï¿½ï¿½Ä»ï¿½ 0
-   5. ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½ï¿½Ê½ï¿½ï¿½
+   ÐèÒªÐ£Ê±Ê±£º
+   1. °Ñ RTC_FORCE_SET_ONCE ¸Ä³É 1
+   2. ÐÞ¸Ä rtc_set_time_once_if_needed() ÀïÃæµÄÊ±¼ä
+   3. ÉÕÂ¼Ò»´Î
+   4. Ê±¼äÉèÖÃÒÔºó£¬±ØÐë¸Ä»Ø 0
+   5. ÔÙÉÕÂ¼ÕýÊ½°æ
 
-   ï¿½ï¿½Ê½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ë±£ï¿½ï¿½ 0ï¿½ï¿½
+   ÕýÊ½ÔËÐÐÊ±±ØÐë±£³Ö 0¡£
 */
 #define RTC_FORCE_SET_ONCE  0
 
 /* =========================
-   ï¿½Ïµï¿½Ì¶ï¿½ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½
+   ÉÏµç¹Ì¶¨³õÊ¼»¯±í
    ========================= */
 
 typedef struct
@@ -105,14 +107,14 @@ code vp_init_item_t vp_init_table[] =
     {0x1843, 0},
     {0x8226, 0},
 
-    /* ï¿½ï¿½ï¿½ï¿½Ä¬ï¿½ï¿½Öµï¿½ï¿½Ö»ï¿½Ïµï¿½Ð´Ò»ï¿½ï¿½ */
+    /* ²¹³¥Ä¬ÈÏÖµ£¬Ö»ÉÏµçÐ´Ò»´Î */
     {0x0917, 0},
     {0x1109, 0},
 
     /* Ð´ 100 */
     {0x1075, 100},
 
-    /* ï¿½Ø¶ï¿½ï¿½Ì¶ï¿½Öµ */
+    /* ÆäËû¹Ì¶¨Ä¬ÈÏÖµ */
     {0x1099, 10},
     {0x1059, 30},
     {0x1061, 10},
@@ -120,32 +122,32 @@ code vp_init_item_t vp_init_table[] =
     {0x1065, 50},
     {0x1067, 70},
     {0x1069, 100},
-	{0x1043, 150},
-	{0x1045, 300},
-	{0x1047, 170},
-	{0x1049, 320},
+    {0x1043, 150},
+    {0x1045, 300},
+    {0x1047, 170},
+    {0x1049, 320},
 };
 
 #define VP_INIT_TABLE_SIZE  (sizeof(vp_init_table) / sizeof(vp_init_table[0]))
 
 /* =========================
-   È«ï¿½Ö±ï¿½ï¿½ï¿½
-   ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ xdataï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ DATA/IDATA ï¿½ï¿½
+   È«¾Ö±äÁ¿
+   ¾¡Á¿·Å xdata£¬±ÜÃâ DATA/IDATA ²»¹»
    ========================= */
 
 xdata rtc_time_t rtc;
 
 xdata u16 loop_count;
 
-xdata s16 cur_temp_raw_x10;    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô­Ê¼ï¿½Â¶ï¿½
-xdata s16 cur_temp_show_x10;   // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¾ï¿½Â¶ï¿½
-xdata s16 set_temp_x10;        // ï¿½è¶¨ï¿½Â¶ï¿½
+xdata s16 cur_temp_raw_x10;    // ´«¸ÐÆ÷Ô­Ê¼ÎÂ¶È
+xdata s16 cur_temp_show_x10;   // ²¹³¥ºóµÄÏÔÊ¾ÎÂ¶È
+xdata s16 set_temp_x10;        // Éè¶¨ÎÂ¶È
 
-xdata s16 temp_comp_x10;       // ï¿½Â¶È²ï¿½ï¿½ï¿½ï¿½ï¿½1 = 0.1ï¿½ï¿½
-xdata s16 hum_comp_x10;        // Êªï¿½È²ï¿½ï¿½ï¿½ï¿½ï¿½10 = 1 Êªï¿½ï¿½
+xdata s16 temp_comp_x10;       // ÎÂ¶È²¹³¥£¬1 = 0.1¡æ
+xdata s16 hum_comp_x10;        // Êª¶È²¹³¥£¬10 = 1 Êª¶È
 
-xdata s16 hum_raw;             // Ô­Ê¼Êªï¿½È£ï¿½Ä¿Ç°ï¿½Ì¶ï¿½ 24
-xdata s16 hum_show;            // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¾Êªï¿½ï¿½
+xdata s16 hum_raw;             // Ô­Ê¼Êª¶È£¬Ä¿Ç°¹Ì¶¨ 24
+xdata s16 hum_show;            // ²¹³¥ºóµÄÏÔÊ¾Êª¶È
 
 xdata u16 fan_mode;
 xdata u16 work_mode;
@@ -157,7 +159,7 @@ xdata u16 disp_hour;
 xdata u16 disp_minute;
 
 /* =========================
-   ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+   ³õÊ¼»¯±äÁ¿
    ========================= */
 
 static void app_vars_init(void)
@@ -177,15 +179,16 @@ static void app_vars_init(void)
     fan_mode = FAN_AUTO;
     work_mode = MODE_COOL;
 
-    target_fan = 1;
-    fan_percent = 20;
+    /* Í¨µçÄ¬ÈÏ´ý»ú£¬²»Ö´ÐÐ·ç·§¶¯×÷ */
+    target_fan = FAN_POWER_OFF;
+    fan_percent = 0;
 
     disp_hour = 0;
     disp_minute = 0;
 }
 
 /* =========================
-   0-10V / PWM ï¿½ï¿½ï¿½
+   0-10V / PWM Êä³ö
    ========================= */
 
 static void output_pin_set(u8 level)
@@ -205,7 +208,7 @@ static void output_pin_set(u8 level)
 static void output_init(void)
 {
     /*
-       P1.3 / P1.4 ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+       P1.3 / P1.4 ÉèÖÃÊä³ö
        bit3 = 0x08
        bit4 = 0x10
     */
@@ -228,7 +231,7 @@ static void output_set_percent(u16 percent)
     output_percent_now = percent;
 
     /*
-       ï¿½ï¿½ 0~100% ï¿½ï¿½ï¿½ï¿½ï¿½ 0~20 tick
+       °Ñ 0~100% Ó³Éäµ½ 0~20 tick
        20% -> 4 tick
        40% -> 8 tick
        60% -> 12 tick
@@ -239,8 +242,8 @@ static void output_set_percent(u16 percent)
 }
 
 /*
-   ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ sys.c ï¿½ï¿½ Timer2 ï¿½Ð¶ï¿½Ã¿ 1ms ï¿½ï¿½Ò»ï¿½Î¡ï¿½
-   ï¿½ï¿½ï¿½ï¿½Ð´ï¿½ï¿½ staticï¿½ï¿½ï¿½ï¿½Îª sys.c Òª extern ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+   Õâ¸öº¯ÊýÓÉ sys.c µÄ Timer2 ÖÐ¶ÏÃ¿ 1ms µ÷ÓÃÒ»´Î¡£
+   ²»ÄÜÐ´³É static£¬ÒòÎª sys.c Òª extern µ÷ÓÃËü¡£
 */
 void output_pwm_tick_1ms(void)
 {
@@ -273,7 +276,7 @@ void output_pwm_tick_1ms(void)
 }
 
 /* =========================
-   RTC Ò»ï¿½ï¿½ï¿½ï¿½Ð£Ê±
+   RTC Ò»´ÎÐÔÐ£Ê±
    ========================= */
 
 static void rtc_set_time_once_if_needed(void)
@@ -282,12 +285,12 @@ static void rtc_set_time_once_if_needed(void)
     rtc_time_t set_time;
 
     /*
-       Ê¾ï¿½ï¿½ï¿½ï¿½2026-07-19 18:41:00
+       Ê¾Àý£º2026-07-19 18:41:00
 
-       ï¿½á¹¹ï¿½ï¿½Ë³ï¿½ï¿½
+       ½á¹¹ÌåË³Ðò£º
        year, month, day, week, hour, min, sec, fault
 
-       week ï¿½ï¿½ï¿½ UI ï¿½ï¿½ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½Ú£ï¿½Ó°ï¿½ì²»ï¿½ï¿½
+       week Ö»Ó°Ïì UI ÏÔÊ¾ÐÇÆÚ£¬Ó°Ïì²»´ó
     */
     set_time.year  = 26;
     set_time.month = 7;
@@ -304,7 +307,7 @@ static void rtc_set_time_once_if_needed(void)
 }
 
 /* =========================
-   ï¿½Ïµï¿½Ì¶ï¿½Ð´ VP
+   ÉÏµç¹Ì¶¨Ð´ VP
    ========================= */
 
 static void vp_write_init_table(void)
@@ -321,15 +324,14 @@ static void vp_write_init_table(void)
 }
 
 /* =========================
-   ï¿½ï¿½ï¿½ï¿½ï¿½ß¼ï¿½
+   ·ç·§µµÎ»Âß¼­
    ========================= */
 
 static u16 fan_to_percent(u16 fan)
 {
     /*
-       switch-valve mode:
-       keep the old function name, but now it returns action duration seconds.
-       1=low 6s, 2=mid 11s, 3=high 16s, 4/5=full 20s.
+       ¿ª¹Ø·§¶¨Ê±¶¯×÷£ºÕâÀï±£Áô¾Éº¯ÊýÃû£¬µ«·µ»ØÖµÏÖÔÚ±íÊ¾¶¯×÷³ÖÐøÃëÊý¡£
+       1=µÍµµ 6s£¬2=ÖÐµµ 11s£¬3=¸ßµµ 16s£¬4/5=Âúµµ 20s¡£
     */
     switch(fan)
     {
@@ -346,32 +348,35 @@ static u16 calc_auto_fan(u16 mode, s16 cur_temp, s16 set_temp)
 {
     s16 diff = 0;
 
+    /*
+       °´¼×·½Âß¼­£º
+       ÖÆÀä£º·¿¼ä¹ýÀä²Åµ÷Ð¡£¬ËùÒÔ¿´ set_temp - cur_temp¡£
+       ÖÆÈÈ£º·¿¼ä¹ýÈÈ²Åµ÷Ð¡£¬ËùÒÔ¿´ cur_temp - set_temp¡£
+
+       diff > 3.0¡æ -> µÍµµ
+       diff > 1.0¡æ -> ÖÐµµ
+       ·ñÔò        -> Âúµµ
+    */
     if(mode == MODE_COOL)
-    {
-        diff = cur_temp - set_temp;
-    }
-    else if(mode == MODE_HEAT)
     {
         diff = set_temp - cur_temp;
     }
+    else if(mode == MODE_HEAT)
+    {
+        diff = cur_temp - set_temp;
+    }
     else
     {
-        return 4;   /* vent/default: full */
+        return 4;   /* Í¨·çÄ¬ÈÏÂúµµ */
     }
 
     /*
-       switch-valve auto mode with 2.0C hysteresis.
-       target_fan is reused as the previous/last executed level.
-       No new global/xdata variable is added.
+       ´ø 2.0¡æ »Ø²î¡£
+       target_fan ¸´ÓÃÎªÉÏÒ»´ÎÖ´ÐÐ/±£³ÖµÄµµÎ»£¬²»ÔÙÐÂÔöÈ«¾Ö±äÁ¿¡£
 
-       Rising/load increasing:
-       diff > 3.0C -> low
-       diff > 1.0C -> mid
-       otherwise   -> full
-
-       Falling/load decreasing with 2.0C hysteresis:
-       low exits when diff <= 1.0C
-       mid exits to full when diff <= -1.0C
+       µ±Ç°µÍµµ£ºdiff ½µµ½ <= 1.0¡æ Ê±£¬ÍË³öµÍµµµ½ÖÐµµ¡£
+       µ±Ç°ÖÐµµ£ºdiff > 3.0¡æ ½øµÍµµ£»diff <= -1.0¡æ »ØÂúµµ¡£
+       µ±Ç°Âúµµ/ÆäËû£º°´ãÐÖµÖ±½ÓÅÐ¶Ï¡£
     */
     if(target_fan == 1)
     {
@@ -418,7 +423,7 @@ static u16 calc_target_fan(u16 fan_sel, u16 mode, s16 cur_temp, s16 set_temp)
 }
 
 /* =========================
-   ï¿½ï¿½Ç°ï¿½Ë±ï¿½ï¿½ï¿½
+   ¶ÁÇ°¶Ë±äÁ¿
    ========================= */
 
 static void read_user_vars(void)
@@ -431,20 +436,35 @@ static void read_user_vars(void)
     sys_read_vp(VP_HUM_COMP, (u8 *)&hum_comp_x10, 1);
 }
 
+static u16 read_power_state_protected(void)
+{
+    u16 pwr;
+
+    sys_read_vp(VP_POWER_STATE, (u8 *)&pwr, 1);
+
+    if(pwr > 1)
+    {
+        pwr = 0;
+        sys_write_vp(VP_POWER_STATE, (u8 *)&pwr, 1);
+    }
+
+    return pwr;
+}
+
 /* =========================
-   ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+   ²ÎÊý±£»¤
    ========================= */
 
 static void protect_user_vars(void)
 {
-    /* ï¿½ï¿½ï¿½Ù±ï¿½ï¿½ï¿½ï¿½ï¿½0=ï¿½Ô¶ï¿½ï¿½ï¿½1~5=ï¿½Ö¶ï¿½ï¿½ï¿½ï¿½ï¿½ */
+    /* ·çËÙ±äÁ¿£º0=×Ô¶¯£¬1~5=ÊÖ¶¯·çËÙ */
     if(fan_mode > 5)
     {
         fan_mode = FAN_AUTO;
         sys_write_vp(VP_FAN_MODE, (u8 *)&fan_mode, 1);
     }
 
-    /* Ä£Ê½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½0=ï¿½ï¿½ï¿½ä£¬1=ï¿½ï¿½ï¿½È£ï¿½2=Í¨ï¿½ï¿½ */
+    /* ¹¤×÷Ä£Ê½£º0=ÖÆÀä£¬1=ÖÆÈÈ£¬2=Í¨·ç */
     if(work_mode > 2)
     {
         work_mode = MODE_COOL;
@@ -452,9 +472,9 @@ static void protect_user_vars(void)
     }
 
     /*
-       ï¿½è¶¨ï¿½Â¶È±ï¿½ï¿½ï¿½ï¿½ï¿½
-       10.0ï¿½ï¿½ ~ 35.0ï¿½ï¿½
-       ï¿½ï¿½ï¿½Þ¿ï¿½ï¿½ß½ç£¬ï¿½ï¿½ï¿½ï¿½ 24.0ï¿½ï¿½
+       Éè¶¨ÎÂ¶È±£»¤£º
+       10.0¡æ ~ 35.0¡æ
+       ³¬½çÀ­»Ø±ß½ç
     */
     if(set_temp_x10 < 100)
     {
@@ -468,9 +488,9 @@ static void protect_user_vars(void)
     }
 
     /*
-       ï¿½Â¶È²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
-       -10.0ï¿½ï¿½ ~ +10.0ï¿½ï¿½
-       Ò²ï¿½ï¿½ï¿½ï¿½ -100 ~ +100
+       ÎÂ¶È²¹³¥±£»¤£º
+       -10.0¡æ ~ +10.0¡æ
+       Ò²¾ÍÊÇ -100 ~ +100
     */
     if(temp_comp_x10 < -100)
     {
@@ -484,9 +504,9 @@ static void protect_user_vars(void)
     }
 
     /*
-       Êªï¿½È²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
-       -50 ~ +50 Êªï¿½È¡ï¿½
-       ï¿½ï¿½Îª 10 = 1 Êªï¿½È£ï¿½ï¿½ï¿½ï¿½Ô·ï¿½Î§ï¿½ï¿½ -500 ~ +500ï¿½ï¿½
+       Êª¶È²¹³¥±£»¤£º
+       -50 ~ +50 Êª¶È¡£
+       ÒòÎª 10 = 1 Êª¶È£¬ËùÒÔ·¶Î§ÊÇ -500 ~ +500¡£
     */
     if(hum_comp_x10 < -500)
     {
@@ -501,29 +521,29 @@ static void protect_user_vars(void)
 }
 
 /* =========================
-   ï¿½ï¿½Êªï¿½ï¿½ï¿½ï¿½Ê¾
+   ÎÂÊª¶ÈÏÔÊ¾
    ========================= */
 
 static void update_sensor_display_values(void)
 {
-    /* ï¿½ï¿½È¡ï¿½ï¿½Êµï¿½Â¶ï¿½ */
+    /* ¶ÁÈ¡ÕæÊµÎÂ¶È */
     cur_temp_raw_x10 = ntc_read_external_x10();
 
     /*
-       ï¿½Â¶ï¿½ï¿½ï¿½Ê¾ = ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô­Ê¼ï¿½Â¶ï¿½ + ï¿½Â¶È²ï¿½ï¿½ï¿½
-       ï¿½Â¶È²ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½1 = 0.1ï¿½ï¿½
+       ÎÂ¶ÈÏÔÊ¾ = ´«¸ÐÆ÷Ô­Ê¼ÎÂ¶È + ÎÂ¶È²¹³¥
+       ÎÂ¶È²¹³¥µ¥Î»£º1 = 0.1¡æ
     */
     cur_temp_show_x10 = cur_temp_raw_x10 + temp_comp_x10;
 
     /*
-       Êªï¿½ï¿½Ä¿Ç°Ã»ï¿½ï¿½ï¿½ï¿½Êµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã¹Ì¶ï¿½ 24ï¿½ï¿½
-       ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÊµÊªï¿½È´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ hum_raw = 24 ï¿½æ»»ï¿½ï¿½ï¿½ï¿½Êµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
+       Êª¶ÈÄ¿Ç°Ã»ÓÐÕæÊµ´«¸ÐÆ÷£¬ÏÈÓÃ¹Ì¶¨ 24¡£
+       ºóÐøÈç¹û½ÓÕæÊµÊª¶È´«¸ÐÆ÷£¬ÓÃÕæÊµÖµÌæ»» hum_raw = 24¡£
     */
     hum_raw = 24;
 
     /*
-       Êªï¿½ï¿½ï¿½ï¿½Ê¾ = Ô­Ê¼Êªï¿½ï¿½ + Êªï¿½È²ï¿½ï¿½ï¿½ / 10
-       Êªï¿½È²ï¿½ï¿½ï¿½ï¿½ï¿½Î»ï¿½ï¿½10 = 1 Êªï¿½ï¿½
+       Êª¶ÈÏÔÊ¾ = Ô­Ê¼Êª¶È + Êª¶È²¹³¥ / 10
+       Êª¶È²¹³¥µ¥Î»£º10 = 1 Êª¶È
     */
     hum_show = hum_raw + hum_comp_x10 / 10;
 
@@ -538,7 +558,7 @@ static void update_sensor_display_values(void)
 }
 
 /* =========================
-   RTC ï¿½ï¿½Ê¾
+   RTC ÏÔÊ¾
    ========================= */
 
 static void update_rtc_display_values(void)
@@ -550,7 +570,7 @@ static void update_rtc_display_values(void)
 }
 
 /* =========================
-   ï¿½ï¿½ï¿½Ù¸ï¿½ï¿½ï¿½
+   ·ç·§¸üÐÂ
    ========================= */
 
 static void update_fan_logic(void)
@@ -559,12 +579,9 @@ static void update_fan_logic(void)
     u16 duration;
 
     /*
-       Boot action lock:
-       After power-on, force full output for 20s first.
-       During these 20s, do NOT let VP_FAN_MODE or auto temperature logic
-       change it into low/manual-1.
-       No new global/xdata variable is used; target_fan == FAN_BOOT_LOCK
-       means the boot full action is still running.
+       ¿ª»úÂúµµËø¶¨£º
+       µã»÷¿ª»úºó£¬ÏÈÇ¿ÖÆÂúµµÊä³ö 20s¡£
+       Õâ 20s ÄÚ²»ÔÊÐí VP_FAN_MODE »ò×Ô¶¯ÎÂ¿ØÂß¼­°ÑËü¸Ä³ÉµÍµµ/ÊÖ¶¯1¡£
     */
     if(target_fan == FAN_BOOT_LOCK)
     {
@@ -575,7 +592,9 @@ static void update_fan_logic(void)
             if(fan_percent == 0)
             {
                 output_set_percent(0);
-                target_fan = 0;
+
+                /* Âúµµ¶¯×÷ÒÑ¾­Ö´ÐÐ¹ý£¬¼ÇÂ¼µ±Ç°ÒÑ¾­ÊÇÂúµµ£¬±ÜÃâÏÂÒ»ÂÖ×Ô¶¯ÂúµµÊ±Á¢¿ÌÖØ¸´Ö´ÐÐ */
+                target_fan = 4;
             }
         }
         return;
@@ -589,10 +608,8 @@ static void update_fan_logic(void)
     );
 
     /*
-       IMPORTANT:
-       No new global/xdata variables are used in this build.
-       target_fan  = last executed fan level
-       fan_percent = remaining output seconds, for debug display
+       target_fan  = ÉÏÒ»´ÎÖ´ÐÐ/±£³ÖµÄµµÎ»
+       fan_percent = Ê£ÓàÊä³öÃëÊý£¬ÓÃÓÚµ÷ÊÔÏÔÊ¾
     */
     if(new_target_fan != target_fan)
     {
@@ -623,8 +640,52 @@ static void update_fan_logic(void)
     }
 }
 
+static void update_power_and_fan_logic(void)
+{
+    u16 pwr;
+
+    pwr = read_power_state_protected();
+
+    /*
+       ¹Ø»ú/´ý»ú£º
+       ÏÔÊ¾¡¢ÎÂÊª¶È¡¢RTC ¼ÌÐøË¢ÐÂ£¬µ«·ç·§Êä³ö±ØÐë±£³Ö 0V¡£
+    */
+    if(pwr == 0)
+    {
+        if(target_fan != FAN_POWER_OFF)
+        {
+            output_set_percent(0);
+            target_fan = FAN_POWER_OFF;
+            fan_percent = 0;
+        }
+        else
+        {
+            output_set_percent(0);
+        }
+        return;
+    }
+
+    /*
+       ¿ª»ú±ßÑØ£º
+       Ç°¶Ë°Ñ 0x7373 ´Ó 0 Ð´³É 1 ºó£¬target_fan ÈÔÊÇ FAN_POWER_OFF£¬
+       ÕâÀï´¥·¢Ò»´Î¡°¿ª»úÂúµµ¶¯×÷¡±¡£
+    */
+    if(target_fan == FAN_POWER_OFF)
+    {
+        fan_mode = FAN_AUTO;
+        sys_write_vp(VP_FAN_MODE, (u8 *)&fan_mode, 1);
+
+        target_fan = FAN_BOOT_LOCK;
+        fan_percent = 20;
+        output_set_percent(100);
+        return;
+    }
+
+    update_fan_logic();
+}
+
 /* =========================
-   Ð´ï¿½ï¿½Ê¾
+   Ð´ÏÔÊ¾
    ========================= */
 
 static void write_display_values(void)
@@ -636,7 +697,7 @@ static void write_display_values(void)
 }
 
 /* =========================
-   Ð´ï¿½ï¿½ï¿½ï¿½
+   Ð´µ÷ÊÔ
    ========================= */
 
 static void write_debug_values(void)
@@ -646,6 +707,10 @@ static void write_debug_values(void)
     if(target_fan == FAN_BOOT_LOCK)
     {
         dbg_target_fan = 4;
+    }
+    else if(target_fan == FAN_POWER_OFF)
+    {
+        dbg_target_fan = 0;
     }
     else
     {
@@ -668,13 +733,12 @@ static void write_debug_values(void)
 
 int main(void)
 {
+    u16 pwr_init;
+
     sys_init();
     app_vars_init();
 
-    /*
-       ï¿½ï¿½Ê¼ï¿½ï¿½ 0-10V/PWM ï¿½ï¿½ï¿½ï¿½ï¿½
-       ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½Ç°Ö´ï¿½Ð¡ï¿½
-    */
+    /* ³õÊ¼»¯ 0-10V/PWM Êä³ö£¬Ò»¶¨ÒªÔÚÖ÷Ñ­»·Ç°Ö´ÐÐ */
     output_init();
 
     ntc_init();
@@ -682,15 +746,14 @@ int main(void)
     rtc_set_time_once_if_needed();
 
     /*
-       ï¿½Ïµï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½
-       ï¿½ï¿½Ð©ï¿½ï¿½Ö·Ö»Ð´Ò»ï¿½Î£ï¿½ï¿½ï¿½Òªï¿½ï¿½ while ï¿½ï·´ï¿½ï¿½Ð´ï¿½ï¿½
-       ï¿½ï¿½ï¿½ï¿½Ç°ï¿½Ëµï¿½ï¿½ï¿½ï¿½Â¶È²ï¿½ï¿½ï¿½/Êªï¿½È²ï¿½ï¿½ï¿½ï¿½á±»ï¿½ï¿½Ì¨ï¿½ï¿½ï¿½ï¿½ï¿½
+       ÉÏµç³õÊ¼»¯±í£º
+       ÕâÐ©µØÖ·Ö»Ð´Ò»´Î£¬²»Òª·Åµ½ while Àï·´¸´Ð´¡£
     */
     vp_write_init_table();
 
     /*
-       ï¿½Ïµï¿½Ä¬ï¿½ï¿½Öµï¿½ï¿½
-       ×¢ï¿½â£ºï¿½ï¿½Ð©Ò²ï¿½ï¿½Ö»Ð´Ò»ï¿½Î¡ï¿½
+       ÉÏµçÄ¬ÈÏÖµ£º
+       ×¢Òâ£ºÕâÐ©Ò²Ö»Ð´Ò»´Î¡£
     */
     set_temp_x10 = 240;
     fan_mode = FAN_AUTO;
@@ -703,27 +766,32 @@ int main(void)
     sys_write_vp(VP_DISP_SD, (u8 *)&hum_show, 1);
 
     /*
-       Switch-valve boot action:
-       power on -> full level, output 100% for 20s, then update_fan_logic() will stop it.
-       target_fan/fan_percent are existing global variables, no new xdata variables are added.
+       Í¨µç´ý»ú£º
+       Í¨µçºó²»Ö´ÐÐÂúµµ¶¯×÷¡£
+       Ç°¶Ë¿ª»ú°´Å¥»á°Ñ 0x7373 Ð´³É 1£»
+       Ç°¶Ë¹Ø»ú°´Å¥»á°Ñ 0x7373 Ð´³É 0£»
+       C Ö»¶ÁÈ¡ 0x7373£¬²»¸ºÔðÇÐÒ³Ãæ¡£
     */
-    target_fan = FAN_BOOT_LOCK;
-    fan_percent = 20;
-    output_set_percent(100);
+    pwr_init = 0;
+    sys_write_vp(VP_POWER_STATE, (u8 *)&pwr_init, 1);
+
+    target_fan = FAN_POWER_OFF;
+    fan_percent = 0;
+    output_set_percent(0);
 
     while(1)
     {
         loop_count++;
 
         /*
-           Ë³ï¿½ï¿½
-           1. ï¿½ï¿½Ç°ï¿½Ë±ï¿½ï¿½ï¿½
-           2. ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
-           3. ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ó²ï¿½ï¿½ï¿½
-           4. ï¿½ï¿½Ê±ï¿½ï¿½
-           5. ï¿½ï¿½ï¿½ï¿½ï¿½
-           6. ï¿½ï¿½ï¿½ï¿½ 0-10V/PWM ï¿½ï¿½ï¿½
-           7. Ð´ï¿½ï¿½ï¿½ï¿½Ê¾
+           Ë³Ðò£º
+           1. ¶ÁÇ°¶Ë±äÁ¿
+           2. ²ÎÊý±£»¤
+           3. ¸üÐÂ´«¸ÐÆ÷ÏÔÊ¾Öµ
+           4. ¸üÐÂÊ±¼ä
+           5. ¸ù¾Ý 0x7373 ¾ö¶¨ÊÇ·ñÖ´ÐÐ·ç·§Âß¼­
+           6. Ð´ÏÔÊ¾
+           7. Ð´µ÷ÊÔ
         */
         read_user_vars();
         protect_user_vars();
@@ -731,7 +799,7 @@ int main(void)
         update_sensor_display_values();
         update_rtc_display_values();
 
-        update_fan_logic();
+        update_power_and_fan_logic();
 
         write_display_values();
         write_debug_values();
