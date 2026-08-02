@@ -24,6 +24,12 @@
 #define VP_DISP_MINUTE     0x6688   // 分钟显示
 #define VP_DISP_SD         0x2288   // 湿度显示，目前默认 24，可叠加湿度补偿
 
+/* RTC 手动校时临时变量：不要直接改 0x6666 / 0x6688，它们会被后端每秒刷新覆盖 */
+#define VP_RTC_SET_HOUR    0x1961   // 校时页面：小时设置，0~23
+#define VP_RTC_SET_MINUTE  0x1971   // 校时页面：分钟设置，0~59
+#define VP_RTC_SET_OK      0x1981   // 校时确认键：写 1 触发校时，C 会清回 0
+#define VP_RTC_SET_CANCEL  0x1983   // 校时取消键：写 1 后恢复为当前 RTC 时间，C 会清回 0
+
 /* 补偿变量 */
 #define VP_TEMP_COMP       0x0917   // 温度补偿，1 = 0.1℃
 #define VP_HUM_COMP        0x1109   // 湿度补偿，10 = 1 湿度
@@ -137,6 +143,12 @@ code vp_init_item_t vp_init_table[] =
     {0x1931, 70},
     {0x1941, 100},
     {0x1951, 100},
+
+    /* RTC 校时页面默认值，避免数据显示为 -1 */
+    {0x1961, 0},
+    {0x1971, 0},
+    {0x1981, 0},
+    {0x1983, 0},
 
     {0x1043, 150},
     {0x1045, 300},
@@ -621,6 +633,100 @@ static void update_rtc_display_values(void)
     disp_minute = rtc.min;
 }
 
+
+static void rtc_sync_set_vp_from_current(void)
+{
+    u16 value;
+
+    rtc_read(&rtc);
+
+    value = rtc.hour;
+    sys_write_vp(VP_RTC_SET_HOUR, (u8 *)&value, 1);
+
+    value = rtc.min;
+    sys_write_vp(VP_RTC_SET_MINUTE, (u8 *)&value, 1);
+
+    value = 0;
+    sys_write_vp(VP_RTC_SET_OK, (u8 *)&value, 1);
+    sys_write_vp(VP_RTC_SET_CANCEL, (u8 *)&value, 1);
+}
+
+static void update_rtc_set_logic(void)
+{
+    u16 ok;
+    u16 cancel;
+    u16 set_hour;
+    u16 set_minute;
+
+    ok = 0;
+    cancel = 0;
+
+    sys_read_vp(VP_RTC_SET_OK, (u8 *)&ok, 1);
+    sys_read_vp(VP_RTC_SET_CANCEL, (u8 *)&cancel, 1);
+
+    if(cancel == 1)
+    {
+        rtc_sync_set_vp_from_current();
+        return;
+    }
+
+    if(ok != 1)
+    {
+        return;
+    }
+
+    set_hour = 0;
+    set_minute = 0;
+
+    sys_read_vp(VP_RTC_SET_HOUR, (u8 *)&set_hour, 1);
+    sys_read_vp(VP_RTC_SET_MINUTE, (u8 *)&set_minute, 1);
+
+    if(set_hour > 23)
+    {
+        set_hour = 23;
+        sys_write_vp(VP_RTC_SET_HOUR, (u8 *)&set_hour, 1);
+    }
+
+    if(set_minute > 59)
+    {
+        set_minute = 59;
+        sys_write_vp(VP_RTC_SET_MINUTE, (u8 *)&set_minute, 1);
+    }
+
+    /* 读取当前 RTC，保留年月日星期，只修改时分秒 */
+    rtc_read(&rtc);
+
+    /* 如果 RTC 日期异常，给一个安全默认日期；屏幕目前只显示时分，不影响使用 */
+    if(rtc.year == 0 || rtc.month == 0 || rtc.month > 12 || rtc.day == 0 || rtc.day > 31)
+    {
+        rtc.year  = 26;
+        rtc.month = 8;
+        rtc.day   = 2;
+        rtc.week  = 7;
+    }
+
+    rtc.hour  = (u8)set_hour;
+    rtc.min   = (u8)set_minute;
+    rtc.sec   = 0;
+    rtc.fault = 0;
+
+    rtc_set_time(&rtc);
+    sys_delay_ms(20);
+
+    ok = 0;
+    sys_write_vp(VP_RTC_SET_OK, (u8 *)&ok, 1);
+
+    /* 校时后立刻刷新显示变量，避免等下一轮才更新 */
+    rtc_read(&rtc);
+    disp_hour = rtc.hour;
+    disp_minute = rtc.min;
+
+    set_hour = disp_hour;
+    set_minute = disp_minute;
+    sys_write_vp(VP_RTC_SET_HOUR, (u8 *)&set_hour, 1);
+    sys_write_vp(VP_RTC_SET_MINUTE, (u8 *)&set_minute, 1);
+}
+
 /* =========================
    风阀更新
    ========================= */
@@ -828,6 +934,9 @@ int main(void)
     sys_write_vp(VP_WORK_MODE, (u8 *)&work_mode, 1);
     sys_write_vp(VP_DISP_SD, (u8 *)&hum_show, 1);
 
+    /* 校时页面临时值：上电后同步一次当前 RTC 时间，之后不反复覆盖用户调整 */
+    rtc_sync_set_vp_from_current();
+
     /*
        通电待机：
        通电后不执行满档动作。
@@ -861,6 +970,7 @@ int main(void)
 
         update_sensor_display_values();
         update_rtc_display_values();
+        update_rtc_set_logic();
 
         update_power_and_fan_logic();
 
