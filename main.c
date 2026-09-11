@@ -11,6 +11,11 @@
 #define VP_SET_TEMP        0x2233   // 设定温度，240=24.0℃
 #define VP_POWER_STATE     0x7373   // 前端开关机状态：0=关机/待机，1=开机/运行
 
+#define VP_JIANTOU1        0x8279   // 0=自动，1~5=手动风速1~5
+#define VP_JIANTOU2       0x8280   // 0=制冷，1=制热，2=通风
+#define VP_JIANTOU3        0x8282   // 设定温度，240=24.0℃
+#define VP_JIANTOU4     0x8284   // 前端开关机状态：0=关机/待机，1=开机/运行
+
 /* 风阀开度设置：普通 VP，前端显示 0~100%，C 只在动作开始瞬间读取 */
 #define VP_VALVE_OPEN_1    0x1911   // 档位1开度百分比
 #define VP_VALVE_OPEN_2    0x1921   // 档位2开度百分比
@@ -37,7 +42,7 @@
 /* 调试变量 */
 #define VP_DBG_LOOP        0x1000
 #define VP_DBG_TARGET_FAN  0x8899
-#define VP_DBG_PERCENT     0x8999
+#define VP_DBG_PERCENT     0x8999   // 当前输出百分比，0~100
 #define VP_DBG_FAN_MODE    0x1016
 #define VP_DBG_SET_TEMP    0x1018
 #define VP_DBG_WORK_MODE   0x101A
@@ -120,6 +125,11 @@ code vp_init_item_t vp_init_table[] =
     {0x1835, 0},
     {0x1843, 0},
     {0x8226, 0},
+
+	{0x8279, 0},
+    {0x8280, 0},
+    {0x8282, 0},
+    {0x8284, 0},
 
     /* 补偿默认值，只上电写一次 */
     {0x0917, 0},
@@ -355,34 +365,16 @@ static void vp_write_init_table(void)
    风阀档位逻辑
    ========================= */
 
-static u16 fan_to_percent(u16 fan)
-{
-    /*
-       开关阀定时动作：这里保留旧函数名，但返回值现在表示动作持续秒数。
-       1=低档 6s，2=中档 11s，3=高档 16s，4/5=满档 20s。
-    */
-    switch(fan)
-    {
-        case 1: return 6;
-        case 2: return 11;
-        case 3: return 16;
-        case 4: return 20;
-        case 5: return 20;
-        default: return 20;
-    }
-}
-
 static u16 valve_output_percent_for_fan(u16 fan)
 {
     /*
-       超保守版：
+       持续输出版：
        1. 不新增 xdata 全局变量。
-       2. 不在上电初始化表里写 1911~1951。
-       3. 不在主循环里每秒读取 5 个开度 VP。
-       4. 只在“动作刚开始”的瞬间读取对应档位开度。
+       2. 每轮只读取当前目标档位对应的一个开度 VP。
+       3. 档位 1~5 按设置里的风阀开度百分比输出。
 
-       档位决定动作时间：1=6s, 2=11s, 3=16s, 4/5=20s。
-       开度决定动作期间输出电压：30 -> 约3V，100 -> 约10V。
+       0~100% 对应 0~10V：
+       30 -> 约3V，100 -> 约10V。
     */
     u16 addr;
     u16 percent;
@@ -734,27 +726,36 @@ static void update_rtc_set_logic(void)
 static void update_fan_logic(void)
 {
     u16 new_target_fan;
-    u16 duration;
+    u16 out_percent;
 
     /*
-       开机满档锁定：
-       点击开机后，先强制满档输出 20s。
-       这 20s 内不允许 VP_FAN_MODE 或自动温控逻辑把它改成低档/手动1。
+       开机初始化锁定：
+       点击开机后，先强制 10V 输出 20s。
+       这 20s 内不允许 VP_FAN_MODE 或自动温控逻辑覆盖。
     */
     if(target_fan == FAN_BOOT_LOCK)
     {
         if(fan_percent > 0)
         {
             fan_percent--;
-
-            if(fan_percent == 0)
-            {
-                output_set_percent(0);
-
-                /* 满档动作已经执行过，记录当前已经是满档，避免下一轮自动满档时立刻重复执行 */
-                target_fan = 4;
-            }
         }
+
+        if(fan_percent == 0)
+        {
+            /* 开机 20s 结束后，立刻进入正常持续输出逻辑，不再回 0V 等换档 */
+            new_target_fan = calc_target_fan(
+                fan_mode,
+                work_mode,
+                cur_temp_show_x10,
+                set_temp_x10
+            );
+
+            target_fan = new_target_fan;
+            out_percent = valve_output_percent_for_fan(target_fan);
+            fan_percent = out_percent;
+            output_set_percent(out_percent);
+        }
+
         return;
     }
 
@@ -766,36 +767,15 @@ static void update_fan_logic(void)
     );
 
     /*
-       target_fan  = 上一次执行/保持的档位
-       fan_percent = 剩余输出秒数，用于调试显示
+       持续输出版：
+       档位变化、自动温控结果变化、或当前档位开度设置变化时，
+       输出电压都会在下一轮刷新。
+       不再按 6/11/16/20 秒倒计时停止。
     */
-    if(new_target_fan != target_fan)
-    {
-        target_fan = new_target_fan;
-        duration = fan_to_percent(target_fan);
-        fan_percent = duration;
-
-        if(duration > 0)
-        {
-            output_set_percent(valve_output_percent_for_fan(target_fan));
-        }
-        else
-        {
-            output_set_percent(0);
-        }
-    }
-    else
-    {
-        if(fan_percent > 0)
-        {
-            fan_percent--;
-
-            if(fan_percent == 0)
-            {
-                output_set_percent(0);
-            }
-        }
-    }
+    target_fan = new_target_fan;
+    out_percent = valve_output_percent_for_fan(target_fan);
+    fan_percent = out_percent;
+    output_set_percent(out_percent);
 }
 
 static void update_power_and_fan_logic(void)
@@ -826,7 +806,7 @@ static void update_power_and_fan_logic(void)
     /*
        开机边沿：
        前端把 0x7373 从 0 写成 1 后，target_fan 仍是 FAN_POWER_OFF，
-       这里触发一次“开机满档动作”。
+       这里触发一次“开机初始化动作”：强制 10V 持续 20s。
     */
     if(target_fan == FAN_POWER_OFF)
     {
@@ -834,8 +814,8 @@ static void update_power_and_fan_logic(void)
         sys_write_vp(VP_FAN_MODE, (u8 *)&fan_mode, 1);
 
         target_fan = FAN_BOOT_LOCK;
-        fan_percent = 20;
-        output_set_percent(valve_output_percent_for_fan(4));
+        fan_percent = 20;       /* 开机初始化剩余秒数 */
+        output_set_percent(100); /* 开机初始化固定 10V，不受满档开度设置影响 */
         return;
     }
 
@@ -861,6 +841,7 @@ static void write_display_values(void)
 static void write_debug_values(void)
 {
     u16 dbg_target_fan;
+    u16 dbg_output_percent;
     u16 dbg_output_volt_x10;
 
     if(target_fan == FAN_BOOT_LOCK)
@@ -877,8 +858,10 @@ static void write_debug_values(void)
     }
 
     sys_write_vp(VP_DBG_LOOP, (u8 *)&loop_count, 1);
+    dbg_output_percent = output_percent_now;
+
     sys_write_vp(VP_DBG_TARGET_FAN, (u8 *)&dbg_target_fan, 1);
-    sys_write_vp(VP_DBG_PERCENT, (u8 *)&fan_percent, 1);
+    sys_write_vp(VP_DBG_PERCENT, (u8 *)&dbg_output_percent, 1);
     sys_write_vp(VP_DBG_FAN_MODE, (u8 *)&fan_mode, 1);
     sys_write_vp(VP_DBG_SET_TEMP, (u8 *)&set_temp_x10, 1);
     sys_write_vp(VP_DBG_WORK_MODE, (u8 *)&work_mode, 1);
@@ -961,7 +944,7 @@ int main(void)
            2. 参数保护
            3. 更新传感器显示值
            4. 更新时间
-           5. 根据 0x7373 决定是否执行风阀逻辑
+           5. 根据 0x7373 决定是否执行风阀持续输出逻辑
            6. 写显示
            7. 写调试
         */
