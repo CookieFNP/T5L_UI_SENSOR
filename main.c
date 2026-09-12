@@ -39,6 +39,11 @@
 #define VP_TEMP_COMP       0x0917   // 温度补偿，1 = 0.1℃
 #define VP_HUM_COMP        0x1109   // 湿度补偿，10 = 1 湿度
 
+/* 自动档温差参数：普通 VP，前端可调，单位 0.1℃ */
+#define VP_AUTO_LOW_DIFF   0x1099   // 低档温差阈值，默认 30 = 3.0℃
+#define VP_AUTO_MID_DIFF   0x1059   // 中档温差阈值，默认 10 = 1.0℃
+#define VP_AUTO_HYS_DIFF   0x1061   // 回差温度，默认 20 = 2.0℃
+
 /* 调试变量 */
 #define VP_DBG_LOOP        0x1000
 #define VP_DBG_TARGET_FAN  0x8899
@@ -139,9 +144,9 @@ code vp_init_item_t vp_init_table[] =
     {0x1075, 100},
 
     /* 其他固定默认值 */
-    {0x1099, 10},
-    {0x1059, 30},
-    {0x1061, 10},
+    {0x1099, 30},
+    {0x1059, 10},
+    {0x1061, 20},
     {0x1063, 25},
     {0x1065, 50},
     {0x1067, 70},
@@ -151,7 +156,7 @@ code vp_init_item_t vp_init_table[] =
     {0x1911, 25},
     {0x1921, 50},
     {0x1931, 70},
-    {0x1941, 100},
+    {0x1941, 90},
     {0x1951, 100},
 
     /* RTC 校时页面默认值，避免数据显示为 -1 */
@@ -403,15 +408,53 @@ static u16 valve_output_percent_for_fan(u16 fan)
 static u16 calc_auto_fan(u16 mode, s16 cur_temp, s16 set_temp)
 {
     s16 diff = 0;
+    s16 low_diff = 30;
+    s16 mid_diff = 10;
+    s16 hys_diff = 20;
+    s16 temp_swap;
+
+    /*
+       最小改动版：
+       只在自动档计算时读取前端 3 个参数，不新增全局变量，不在 while 里额外写回。
+
+       VP_AUTO_LOW_DIFF = 0x1099，低档温差阈值，默认 30 = 3.0℃
+       VP_AUTO_MID_DIFF = 0x1059，中档温差阈值，默认 10 = 1.0℃
+       VP_AUTO_HYS_DIFF = 0x1061，回差温度，默认 20 = 2.0℃
+
+       为了避免前端把低档/中档数字填反，这里只在内部自动纠正：
+       较大的温差作为低档阈值，较小的温差作为中档阈值。
+       不写回前端，避免影响显示。
+    */
+    sys_read_vp(VP_AUTO_LOW_DIFF, (u8 *)&low_diff, 1);
+    sys_read_vp(VP_AUTO_MID_DIFF, (u8 *)&mid_diff, 1);
+    sys_read_vp(VP_AUTO_HYS_DIFF, (u8 *)&hys_diff, 1);
+
+    if(low_diff < 0 || low_diff > 200)
+    {
+        low_diff = 30;
+    }
+
+    if(mid_diff < 0 || mid_diff > 200)
+    {
+        mid_diff = 10;
+    }
+
+    if(hys_diff < 0 || hys_diff > 200)
+    {
+        hys_diff = 20;
+    }
+
+    if(low_diff < mid_diff)
+    {
+        temp_swap = low_diff;
+        low_diff = mid_diff;
+        mid_diff = temp_swap;
+    }
 
     /*
        按甲方逻辑：
        制冷：房间过冷才调小，所以看 set_temp - cur_temp。
        制热：房间过热才调小，所以看 cur_temp - set_temp。
-
-       diff > 3.0℃ -> 低档
-       diff > 1.0℃ -> 中档
-       否则        -> 满档
     */
     if(mode == MODE_COOL)
     {
@@ -427,16 +470,18 @@ static u16 calc_auto_fan(u16 mode, s16 cur_temp, s16 set_temp)
     }
 
     /*
-       带 2.0℃ 回差。
-       target_fan 复用为上一次执行/保持的档位，不再新增全局变量。
+       自动档输出：
+       diff > 低档阈值 -> 低档，档位1
+       diff > 中档阈值 -> 中档，档位2
+       否则            -> 满档，档位4
 
-       当前低档：diff 降到 <= 1.0℃ 时，退出低档到中档。
-       当前中档：diff > 3.0℃ 进低档；diff <= -1.0℃ 回满档。
-       当前满档/其他：按阈值直接判断。
+       回差：
+       低档退出点 = 低档阈值 - 回差
+       中档回满档点 = 中档阈值 - 回差
     */
     if(target_fan == 1)
     {
-        if(diff <= 10)
+        if(diff <= (low_diff - hys_diff))
         {
             return 2;
         }
@@ -444,11 +489,11 @@ static u16 calc_auto_fan(u16 mode, s16 cur_temp, s16 set_temp)
     }
     else if(target_fan == 2)
     {
-        if(diff > 30)
+        if(diff > low_diff)
         {
             return 1;
         }
-        else if(diff <= -10)
+        else if(diff <= (mid_diff - hys_diff))
         {
             return 4;
         }
@@ -456,18 +501,17 @@ static u16 calc_auto_fan(u16 mode, s16 cur_temp, s16 set_temp)
     }
     else
     {
-        if(diff > 30)
+        if(diff > low_diff)
         {
             return 1;
         }
-        else if(diff > 10)
+        else if(diff > mid_diff)
         {
             return 2;
         }
         return 4;
     }
 }
-
 static u16 calc_target_fan(u16 fan_sel, u16 mode, s16 cur_temp, s16 set_temp)
 {
     if(fan_sel >= 1 && fan_sel <= 5)
